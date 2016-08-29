@@ -1,0 +1,200 @@
+---
+title: "Analyzing historical airlines data with Destination to Chicago O'Hare Airport"
+author: "Min-Huey Wang and Tomoaki Tanaka"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("dplyr")
+library("ggplot2")
+library(ROCR)
+setwd("C:/Users/Tomoaki Tanaka/Documents/UCSC/IntroDataAnalysis/project")
+base1_path = normalizePath("C:/Users/Tomoaki Tanaka/Documents/UCSC/IntroDataAnalysis/project")
+merge_path = paste0( base1_path, "/merged_data.Rda")
+merged_data <- readRDS(merge_path)
+```
+
+# Motivation
+Flight delays impact the US economics according to the revised final report released on December 16, 2010 from National Center of Excellence for Aviation Operations Research (NEXTOR). The report entitled "Total Delay Impact Study" is a comprehensive assessment of the costs and impacts of flight delay in the United States during 2007.  It concluded in 2007, domestic flight delays were found to cost the U.S. economy $31.2 billion. Among these loss $16.7 billion in direct costs to passengers. The Line Item cost component is shown in table 1.
+<!--O'Hare is currently a major hub for American Airlines and United Airlines as shown in.-->
+
+Table 1 Line Item Cost Component from UA flight delay in 2007 (NEXTOR)
+```{r, echo=FALSE}
+str1 <-c("Flight Delay Against Schedule",
+         "Intrinsic Flight Delay due to Schedule Buffer",
+         "Excess Travel Time due to Schedule Buffer",
+         "Passenger Delay Against Schedule: Delayed Flights",
+         "Passenger Delay Against Schedule: Canceled Flights",
+         "Passenger Delay Against Schedule: Missed Connections",
+         "Capacity-Induced Schedule Delay",
+         "Voluntary Early-Departure-Time Adjustment",
+         "Welfare loss due to switch from air to automobile",
+         "Externality cost from increased road traffic",
+         "Forgone GDP",
+         "Total U.S. Cost")
+
+str2 <-c("Airlines","Airlines","Passengers","Passengers",
+         "Passengers","Passengers","Passengers","Passengers",
+         "Shared","Shared","Shared","All")
+
+str3 <-c(4.6,3.7,6.0,4.7,3.2,1.5,0.7,
+         0.6,2.0,0.2,4.0,31.2)
+
+tabledata <- data.frame("Line Item Cost Component"=str1, "Category"=str2, "Billions"=str3) 
+knitr::kable(tabledata)
+```
+
+This makes the study of the delay of flight valuable. It's worthy to study the delay pattern to have better understanding of the causes such that we can help either the airline companies or passengers to minimize the impacts. 
+
+# State of problem
+We hope from the historical data to build a model to predict the delay of the flight. The biggest challenge is how to choose the right features among 31 features to establish the right model. Can we make suggestion about which airline company is more reliable? Could we improve the cause of delay? i.e. reduce the delay rate. If delay is inevitable, could we estimate the delay time in advance such that either airline company or the customer can prepare for it. 
+
+# Background of Dataset 
+The data set is download from the website of United States Department of Transportation.The data contain 4,780,904 recorders of arriving flight to Chicago O'Hare airport. The time span is from 1987 to 2013 including 23 carriers from 180 cities. The abbreviation namse of 23 carriers are  9E, AA, AS, B6, CO, DH, DL, EA, EV, F9, HP, MQ, NW, OH, OO, PA (1), PI, TW, UA, US, VX, XE, YV. Every recorder has 31 features. The names of features are : Year, Month, DayofMonth, DayOfWeek, DepTime, CRSDepTime, ArrTime, CRSArrTime, UniqueCarrier, FlightNum, TailNum, ActualElapsedTime, CRSElapsedTime, AirTime, ArrDelay, DepDelay, Origin, Dest, Distance, TaxiIn, TaxiOut, Cancelled, CancellationCode, Diverted, CarrierDelay, WeatherDelay, NASDelay, SecurityDelay, LateAircraftDelay, IsArrDelayed, and IsDepDelayed. 
+The total counts of flight arriving O'Hare airport per year is shown in figure 1. Year 1987 and 2013 are not whole year count. There is a step increase after year 2000. A bar chart of count per carrier company per year is shown in figure 2. From the plot it shows the big airline company decreasing their flights to Chicago while local or small airline company takes the loads. Combining information shown in figure 1 and 2 it indicates that the market of flying to O'Hare was opened to more operators after year 2000 and the capacity is increased. 
+
+# Flight variables
+* Variables included in the flight and weather data:
+```{r, echo=FALSE}
+str(merged_data)
+```
+<!--![Nuber of flight per year]("C:\Users\Tomoaki Tanaka\Documents\UCSC\IntroDataAnalysis\project\f_year.png") -->
+
+* Total number of arrival flights excluding cancelled flights:
+```{r, echo=FALSE}
+nrow(subset(merged_data,Cancelled==0 ))
+```
+
+<!--<img src="C:\Users\Tomoaki Tanaka\Documents\UCSC\IntroDataAnalysis\project\f_year.png" />
+-->
+```{r, echo=FALSE}
+planes_year_arr_c <- merged_data%>%
+  group_by(UniqueCarrier,Year)%>%
+  summarise(count = n())
+
+ggplot(planes_year_arr_c, aes (Year, count))+
+  geom_bar(stat="identity")+ 
+  xlab("Year")  +                     # x axis
+  ylab("No. flights") +               # y axis
+  ggtitle("No. of flights by year")   # title
+
+```
+
+Figure 1. Historical total counts of flight arriving Chicago O'Hare airport. 
+
+
+```{r, echo=TRUE}
+ggplot(planes_year_arr_c, aes (Year, count,fill=factor(UniqueCarrier))  ) +
+  geom_bar(stat="identity",position = "dodge")+               # width of bar
+  xlab("Year")  +         
+  ylab("No. flights") +      
+  ggtitle("No. of flights by year") 
+```
+
+Figure 2 Bar chart of count of flight arriving O'Hare airport per carrier company per year.
+
+To fair compare the delay events of every carrier we define the delay rate as delay time divided by traveling distance in unit of (min/mile). Which take into consideration of long travel distance is likely to have longer delay time. The historical delay rate of every carrier is shown in figure 3. We select five big airline companies AA, UA, DL, CO, and NW in U.S.A. for a close look to compare the delay rate. The delay rate of the five company is shown in figure 4. During the time span Delta and Northwest's operating certificates were merged on December 31, 2009. Northwest then ceased to exist as an independent carrier. That is why no more data for NW after 2009. The similar merger happened to UA and CO at later time on November 30, 2011. Among the five airlines NW has the worst delay rate and CO the second worst. After the merger the delay rate of DL jumped because the bad delay rate from NW. As for UA the delay rate seems not affect by CO.  UA and AA have delay rate comparable. The delay rate has slow increase tendency.   
+```{r, echo=TRUE}
+planes_year_arr <- merged_data%>%
+  group_by(UniqueCarrier,Year)%>%
+  filter( ArrDelay>0, ArrDelay!=1)%>%
+  summarise(count = n(), dist=mean(Distance, na.rm=TRUE),
+            delay=mean(ArrDelay, na.rm=TRUE))
+
+ggplot(planes_year_arr,
+       aes(x=Year,y=delay/dist,color=UniqueCarrier))+geom_line()+geom_point()+ylab("delay/dist (min/mile)")
+
+```
+
+Figure 3. The historical delay rate of every carrier arriving O'Hare airport. The delay rate is defined as delay time divided by traveling distance in unit of (min/mile).  
+
+
+```{r, echo=TRUE}
+ggplot(subset(planes_year_arr,UniqueCarrier %in% c("AA","UA","DL","NW","CO")),
+          aes(x=Year,y=delay/dist,color=UniqueCarrier))+geom_line()+geom_point()+ylab("delay/dist (min/mile)")
+```
+
+Figure 4. The historical delay rate of five USA big airline companies. 
+
+# Weather variables
+Weather data include the climate condition variables like temperature, pressure, humidity, precipitation, visibility, cloudcover etc. One weather condition per daya is stored in file. We merged the flight data and weather data to 
+
+* Number of delay by weather events:
+```{r, echo=FALSE}
+merge_with_events<- merged_data[-which(merged_data$Events == ""), ]
+delay_w_events <- subset(merge_with_events,IsArrDelayed=="YES", c(IsArrDelayed, Events) )
+#
+delay_w_events %>% 
+  group_by(Events) %>%
+  summarise(n=n())
+```
+
+<!--![Deperture events by weather]("C:\Users\Tomoaki Tanaka\Documents\UCSC\IntroDataAnalysis\project\delay_weather_events.png")-->
+```{r}
+ggplot(delay_w_events, aes(x=Events, fill=Events)) +
+  geom_bar() +
+  theme(axis.text.x = element_text(angle = 90, hjust = -0.,vjust=0.2))
+```
+
+Figure 5 Plot for No. of delayed flight by weather event
+
+
+# Results of Logistic Regression for arrival delay
+Logistic regression will provide probabilities in the form of P(Y=1|X). Our decision boundary will be 0.5. If P(y=1|X) > 0.5 then y = 1 otherwise y=0.
+
+## Logistic regression model for the arrival delay
+Here we show the results of the logistic regression for arrival delays at O'Hare airport. We use four variables from the flight data: CRSElapsedTime, AirTime, Distance and ts (timestamp) and three variables from the weather data: Events, PrecipitationIn and CloudCover. One percent of original data is used for training for our logistic regression due to the memory limits.
+```{r, echo=FALSE}
+glmdata=filter(merged_data, ArrDelay!="NA", AirTime!="NA",TaxiIn!="NA",
+                    TaxiOut!="NA",Events != "",
+               PrecipitationIn!="NA", CloudCover!="NA")#,IsDepDelayed=="YES")
+#fwdata <- readRDS("C:/Users/Tomoaki Tanaka/Documents/UCSC/IntroDataAnalysis/project/fwdata.Rda")
+dt = sort(sample(nrow(glmdata), nrow(glmdata)*.01))
+train<-glmdata[dt,]
+test_arr<-glmdata[1000000:1240719,]
+
+```
+
+```{r, echo=TRUE}
+arr.glm = glm(IsArrDelayed~CRSElapsedTime
+                + AirTime
+                +Distance 
+                +Events
+                +PrecipitationIn +CloudCover
+                ,data=train, family = binomial) 
+summary(arr.glm)
+```
+
+## Prediction using testset
+We predict arrival delay occured or not from our logistic regression. Test set include 240,720 rows for estimating the performance of our model.
+
+```{r, echo=TRUE}
+fitted.results <- predict(arr.glm,newdata=test_arr,type='response')
+```
+
+## Confusion matrix
+```{r, echo=TRUE}
+table(test_arr$IsArrDelayed, fitted.results > 0.5)
+```
+We can estimate the accuracy of our model from the confusion matrix. You can calculate the accuracy of your model with:
+$$
+Accuracy = \frac{True Positive + True Negative}{True Positive + True Negative+ False Positive + False Negative}
+$$
+
+The confusion matrix shows our logistic regression model using flight and weather data at O'Hare airport shows 81 % accuracy on the test set.
+
+## ROC curve
+Receiver Operating Characteristic (ROC) curve summarizes the model's performance by evaluating the trade offs between true positive rate (sensitivity) and false positive rate (1- specificity). In the ROC curve, the true positive rate is plotted in function of the false positive rate as shown below.
+```{r, echo=TRUE}
+ROCRpred <- prediction(fitted.results, test_arr$IsArrDelayed)
+ROCRperf <- performance(ROCRpred, 'tpr','fpr')
+plot(ROCRperf, colorize = TRUE, text.adj = c(-0.2,1.7))
+```
+
+Figure 6 ROC curve for the arrival delay
+
+# Discussion and Conclusion
+Our logistic regression model using the features: CRSElapsedTime, AirTime, Distance, ts (timestamp), weather Events, weather PrecipitationIn and weather CloudCover can predicts the delay occurrence up to 80% accuracy when verified with the test set. However, we only use 1 % of data for training due to hardware memory limits. It would get better accuracy if we could use more data for training of our model. 
+There are some things we are interested to do but lack of data or time like: flight delay versus the age of the aircraft. It could provide suggestion to the airline company to decide when it's more economic to replace the old aircraft. We notice that delay time can be negative that means flight can arrive earlier. It will be interested to know if the flight delay or flight arriving earlier related to the direction of the flight bound. 
+From the course and exercise of this project we find data analysis can not only check the common acknowledge but also be a powerful tool to explore the unknown which beyond one's expectation and imagination.
